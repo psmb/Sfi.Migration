@@ -119,7 +119,7 @@ class MigrationCommandController extends CommandController {
 					$bodytext = preg_replace('/^((?!<p>).+)$/uim','<p>$1</p>',$bodytext);
 					//Not well tested!
 					$bodytext = preg_replace_callback(
-						'@<link\s+([^\s]*).*>([^<]*)</link>@ui',
+						'@<link\s+([^>]*)>([^<]*)</link>@ui',
 						function ($matches) {
 							//If link to page, we drop that link, as they have changed anyways
 							if(is_numeric($matches[1])){
