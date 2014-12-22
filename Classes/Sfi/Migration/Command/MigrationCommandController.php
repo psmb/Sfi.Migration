@@ -38,6 +38,11 @@ class MigrationCommandController extends CommandController {
 	 */
 	protected $entityManager;
 
+	/**
+	 * @Flow\Inject
+	 * @var NodeDataRepository
+	 */
+	protected $nodeDataRepository;
 
 	/**
 	 * @Flow\Inject
@@ -81,13 +86,13 @@ class MigrationCommandController extends CommandController {
 	protected $assetRepository;
 
 	/**
-	 * Index action
+	 * Migrate action
 	 *
-	 * Some desk
+	 * Migrate stuff from tt_news to Sfi.News
 	 * 
 	 * @return string
 	 */
-	public function indexCommand() {
+	public function migrateCommand() {
 		$allowedImageFileTypes = array("jpg", "jpeg");
 
 		$this->context = $this->contextFactory->create(array('workspaceName' => 'live'));
@@ -105,12 +110,15 @@ class MigrationCommandController extends CommandController {
 				$newsNodeTemplate->setProperty('originalIdentifier',$newsItem['uid']);
 				$newsNodeTemplate->setProperty('title',$newsItem['title']);
 				$newsNodeTemplate->setProperty('teaser',$newsItem['short']);
+				$newsNodeTemplate->setProperty('author',$newsItem['author']);
 				if($newsItem['datetime']){
 					$date = new \DateTime();
 					$date->setTimestamp($newsItem['datetime']);
 					$newsNodeTemplate->setProperty('date',$date);				
 				}
-				$newsNodeTemplate->setProperty('author',$newsItem['author']);
+				if ($newsItem['tx_media_video_url']) {
+					$newsNodeTemplate->setProperty('hasVideo',TRUE);
+				}
 				$newsNode = $rootNode->createNodeFromTemplate($newsNodeTemplate);
 
 				if($newsItem['bodytext']){
@@ -119,17 +127,17 @@ class MigrationCommandController extends CommandController {
 					$bodytext = preg_replace('/^((?!<p>).+)$/uim','<p>$1</p>',$bodytext);
 					//Not well tested!
 					$bodytext = preg_replace_callback(
-						'@<link\s+([^>]*)>([^<]*)</link>@ui',
+						'@<link\s+(\S*)[^>]*>([^<]*)</link>@ui',
 						function ($matches) {
 							//If link to page, we drop that link, as they have changed anyways
 							if(is_numeric($matches[1])){
 								return $matches[2];
-							}else if(preg_match('@(http)([^\s]+)@ui',$matches[0],$matches2)){ //If url, then turn into normal link record:tt_news:2806 
-								return '<a href="'.$matches2[0].'">'.$matches[2].'</a>';
-							}else if(preg_match('@(record:tt_news:)([\d]+)@ui',$matches[0],$matches2)){ //If url, then turn into normal link record:tt_news:2806 
+							}else if(preg_match('@http@ui',$matches[1],$matches2)){ //If url, then turn into normal link
+								return '<a href="'.$matches[1].'">'.$matches[2].'</a>';
+							}else if(preg_match('@(record:tt_news:)([\d]+)@ui',$matches[0],$matches2)){ //Remove links to news record:tt_news:2806 
 								return $matches[2];
 							}else{ //just in case...
-								return $matches[2];
+								return '<a href="'.$matches[1].'">'.$matches[2].'</a>';
 							}
 						},
 						$bodytext
@@ -140,6 +148,15 @@ class MigrationCommandController extends CommandController {
 					$bodytextTemplate->setNodeType($this->nodeTypeManager->getNodeType('TYPO3.Neos.NodeTypes:Text'));
 					$bodytextTemplate->setProperty('text',$bodytext);
 					$mainContentNode->createNodeFromTemplate($bodytextTemplate);
+				}
+				if ($newsItem['tx_media_video_url']) {
+					$videoUrl = $newsItem['tx_media_video_url'];
+					$newsNode = current($nodes);
+					$mainContentNode = $newsNode->getNode('main');
+					$videoTemplate = new \TYPO3\TYPO3CR\Domain\Model\NodeTemplate();
+					$videoTemplate->setNodeType($this->nodeTypeManager->getNodeType('Sfi.Widgets:YouTube'));
+					$videoTemplate->setProperty('videoUrl',$videoUrl);
+					$mainContentNode->createNodeFromTemplate($videoTemplate);
 				}
 				if($newsItem['image']){
 					$coverPhotoNode = $newsNode->getNode('coverPhoto');
@@ -195,18 +212,33 @@ class MigrationCommandController extends CommandController {
 	}
 
 
-	private function getNewsByCat($cat){
-		//$connection = $this->entityManager->getConnection(); //Use this if import from the same DB
+	/**
+	 * Update action
+	 *
+	 * Update existing nodes with some data
+	 * 
+	 * @return string
+	 */
+	public function updateCommand() {
+		$this->context = $this->contextFactory->create(array('workspaceName' => 'live'));
 
-		/* Import from other database */
-		$dsn = 'mysql:dbname=;host=127.0.0.1;charset=utf8';
-		$user = '';
-		$password = '';
-		try {
-			$connection = new \PDO($dsn, $user, $password);
-		} catch (PDOException $e) {
-			die ('Connection failed: ' . $e->getMessage());
+		$news = $this->getNewsByCat(1);
+		foreach ($news as $newsItem) {
+			$term = serialize("originalIdentifier").serialize((string)$newsItem['uid']);
+			$nodes = $this->nodeSearchService->findByProperties($term, array('Sfi.News:News'), $this->context);
+			if (count($nodes)) {
+				echo "Node ".$newsItem['uid']." exists, updating...\n";
+				//Do smth here, then call: $this->nodeDataRepository->persistEntities();
+			} else {
+				echo "Node ".$newsItem['uid']." doesn't exist yet, skipping update\n";
+			}
 		}
+		return "Done!";
+	}
+
+
+	private function getNewsByCat($cat) {
+		$connection = $this->entityManager->getConnection(); //Use this if import from the same DB
 
 		$sql = 'SELECT tt_news.* FROM tt_news
   INNER JOIN tt_news_cat_mm mm on tt_news.uid = mm.uid_local 
